@@ -1,0 +1,1 @@
+ALTER TABLE `recommendedModule` ADD `type` text NOT NULL;

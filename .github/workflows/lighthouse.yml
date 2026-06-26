@@ -1,0 +1,243 @@
+name: Lighthouse Performance Measurement
+
+on:
+  workflow_run:
+    workflows: ["Build & Deploy to AWS"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Target URL to measure (leave empty to use default)"
+        required: false
+      participant_id:
+        description: "Participant ID (leave empty to auto-detect)"
+        required: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  SCORES_BUCKET: performance-hackathon-scores
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli lighthouse
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Determine participant and URL
+        id: config
+        run: |
+          PARTICIPANT_ID="${{ github.event.inputs.participant_id || github.repository_owner }}"
+          TARGET_URL="${{ github.event.inputs.target_url }}"
+          
+          if [ -z "$TARGET_URL" ]; then
+            TARGET_URL="https://${PARTICIPANT_ID}.performance-hackathon.example.com"
+          fi
+          
+          echo "participant_id=${PARTICIPANT_ID}" >> $GITHUB_OUTPUT
+          echo "target_url=${TARGET_URL}" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date -u +%Y%m%dT%H%M%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Wait for service to be healthy
+        run: |
+          TARGET_URL="${{ steps.config.outputs.target_url }}"
+          echo "Waiting for ${TARGET_URL} to be ready..."
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${TARGET_URL}" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Service is ready!"
+              break
+            fi
+            echo "Attempt ${i}/30: HTTP ${HTTP_CODE}, waiting..."
+            sleep 10
+          done
+
+      - name: Run Lighthouse - Page Performance
+        id: lighthouse_pages
+        run: |
+          TARGET_URL="${{ steps.config.outputs.target_url }}"
+          PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
+          
+          mkdir -p lighthouse-results
+          
+          # Define pages to test (matching scoring.md criteria)
+          PAGES=(
+            "/:home"
+            "/timetable:timetable"
+            "/programs/1:program_before"
+            "/programs/2:program_during"
+            "/programs/3:program_after"
+            "/series/1:series"
+            "/episodes/1:episode_free"
+            "/episodes/2:episode_premium"
+            "/not-found-page:404"
+          )
+          
+          TOTAL_SCORE=0
+          RESULTS="[]"
+          
+          for PAGE_ENTRY in "${PAGES[@]}"; do
+            PAGE_PATH="${PAGE_ENTRY%%:*}"
+            PAGE_NAME="${PAGE_ENTRY##*:}"
+            PAGE_URL="${TARGET_URL}${PAGE_PATH}"
+            
+            echo "Testing: ${PAGE_NAME} (${PAGE_URL})"
+            
+            # Run Lighthouse with performance-only config
+            lighthouse "${PAGE_URL}" \
+              --output=json \
+              --output-path="./lighthouse-results/${PAGE_NAME}.json" \
+              --chrome-flags="--headless --no-sandbox --disable-gpu" \
+              --only-categories=performance \
+              --throttling-method=simulate \
+              --preset=desktop \
+              2>/dev/null || true
+            
+            if [ -f "./lighthouse-results/${PAGE_NAME}.json" ]; then
+              # Extract scores
+              FCP=$(jq -r '.audits["first-contentful-paint"].score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              SI=$(jq -r '.audits["speed-index"].score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              LCP=$(jq -r '.audits["largest-contentful-paint"].score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              TBT=$(jq -r '.audits["total-blocking-time"].score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              CLS=$(jq -r '.audits["cumulative-layout-shift"].score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              PERF=$(jq -r '.categories.performance.score // 0' "./lighthouse-results/${PAGE_NAME}.json")
+              
+              # Calculate page score (matching scoring.md formula)
+              PAGE_SCORE=$(echo "$FCP * 10 + $SI * 10 + $LCP * 25 + $TBT * 30 + $CLS * 25" | bc -l | xargs printf "%.1f")
+              TOTAL_SCORE=$(echo "$TOTAL_SCORE + $PAGE_SCORE" | bc -l)
+              
+              echo "  Score: ${PAGE_SCORE}/100 (FCP:${FCP} SI:${SI} LCP:${LCP} TBT:${TBT} CLS:${CLS})"
+              
+              RESULTS=$(echo "$RESULTS" | jq --arg name "$PAGE_NAME" --arg score "$PAGE_SCORE" \
+                --arg fcp "$FCP" --arg si "$SI" --arg lcp "$LCP" --arg tbt "$TBT" --arg cls "$CLS" \
+                --arg perf "$PERF" \
+                '. + [{"page": $name, "score": ($score|tonumber), "fcp": ($fcp|tonumber), "si": ($si|tonumber), "lcp": ($lcp|tonumber), "tbt": ($tbt|tonumber), "cls": ($cls|tonumber), "performance": ($perf|tonumber)}]')
+            else
+              echo "  Failed to measure ${PAGE_NAME}"
+              RESULTS=$(echo "$RESULTS" | jq --arg name "$PAGE_NAME" \
+                '. + [{"page": $name, "score": 0, "error": "measurement_failed"}]')
+            fi
+          done
+          
+          echo "Total page display score: ${TOTAL_SCORE}/900"
+          echo "total_score=${TOTAL_SCORE}" >> $GITHUB_OUTPUT
+          echo "results=${RESULTS}" >> $GITHUB_OUTPUT
+
+      - name: Generate score report
+        env:
+          PARTICIPANT_ID: ${{ steps.config.outputs.participant_id }}
+          TIMESTAMP: ${{ steps.config.outputs.timestamp }}
+          TOTAL_SCORE: ${{ steps.lighthouse_pages.outputs.total_score }}
+        run: |
+          # Create score JSON
+          cat > score-report.json <<EOF
+          {
+            "participant_id": "${PARTICIPANT_ID}",
+            "timestamp": "${TIMESTAMP}",
+            "commit_sha": "${{ github.sha }}",
+            "repository": "${{ github.repository }}",
+            "total_score": ${TOTAL_SCORE:-0},
+            "max_score": 900,
+            "pages": ${{ steps.lighthouse_pages.outputs.results || '[]' }},
+            "measured_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          
+          cat score-report.json
+
+      - name: Upload scores to S3
+        run: |
+          PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
+          TIMESTAMP="${{ steps.config.outputs.timestamp }}"
+          
+          # Upload timestamped report
+          aws s3 cp score-report.json \
+            "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/${TIMESTAMP}.json" \
+            --content-type "application/json"
+          
+          # Upload latest report (overwrite)
+          aws s3 cp score-report.json \
+            "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/latest.json" \
+            --content-type "application/json"
+          
+          echo "Score uploaded to S3"
+
+      - name: Update leaderboard
+        run: |
+          # Download all latest scores and aggregate
+          aws s3 sync "s3://${SCORES_BUCKET}/scores/" ./all-scores/ --exclude "*" --include "*/latest.json"
+          
+          # Generate leaderboard JSON
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const scoresDir = './all-scores';
+            const leaderboard = [];
+            
+            if (fs.existsSync(scoresDir)) {
+              const participants = fs.readdirSync(scoresDir);
+              for (const participant of participants) {
+                const latestFile = path.join(scoresDir, participant, 'latest.json');
+                if (fs.existsSync(latestFile)) {
+                  const data = JSON.parse(fs.readFileSync(latestFile, 'utf-8'));
+                  leaderboard.push({
+                    participant_id: data.participant_id,
+                    total_score: data.total_score,
+                    max_score: data.max_score,
+                    measured_at: data.measured_at,
+                    commit_sha: data.commit_sha,
+                    repository: data.repository
+                  });
+                }
+              }
+            }
+            
+            leaderboard.sort((a, b) => b.total_score - a.total_score);
+            
+            const output = {
+              updated_at: new Date().toISOString(),
+              participants: leaderboard.length,
+              leaderboard: leaderboard
+            };
+            
+            fs.writeFileSync('leaderboard.json', JSON.stringify(output, null, 2));
+            console.log('Leaderboard generated with', leaderboard.length, 'participants');
+          "
+          
+          # Upload leaderboard
+          aws s3 cp leaderboard.json \
+            "s3://${SCORES_BUCKET}/dashboard/leaderboard.json" \
+            --content-type "application/json" \
+            --cache-control "max-age=60"
+
+      - name: Post summary
+        env:
+          PARTICIPANT_ID: ${{ steps.config.outputs.participant_id }}
+          TOTAL_SCORE: ${{ steps.lighthouse_pages.outputs.total_score }}
+        run: |
+          echo "## 📊 Performance Score" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Participant | Score | Max |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| ${PARTICIPANT_ID} | **${TOTAL_SCORE:-0}** | 900 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📈 [Dashboard](https://dashboard.performance-hackathon.example.com)" >> $GITHUB_STEP_SUMMARY

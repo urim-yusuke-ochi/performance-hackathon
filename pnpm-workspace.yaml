@@ -1,0 +1,6 @@
+packages:
+  - ./workspaces/configs
+  - ./workspaces/schema
+  - ./workspaces/client
+  - ./workspaces/server
+  - ./workspaces/test

@@ -1,0 +1,55 @@
+name: Deploy Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dashboard/**"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-1
+  DASHBOARD_BUCKET: performance-hackathon-dashboard
+  SCORES_BUCKET: performance-hackathon-scores
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy dashboard to S3
+        run: |
+          # Upload dashboard files
+          aws s3 sync dashboard/ "s3://${DASHBOARD_BUCKET}/" \
+            --delete \
+            --cache-control "max-age=300"
+          
+          # Copy leaderboard.json from scores bucket to dashboard bucket
+          aws s3 cp "s3://${SCORES_BUCKET}/dashboard/leaderboard.json" \
+            "s3://${DASHBOARD_BUCKET}/leaderboard.json" \
+            --cache-control "max-age=60" || true
+
+      - name: Invalidate CloudFront
+        run: |
+          DIST_ID=$(aws cloudformation describe-stacks \
+            --stack-name performance-hackathon-base \
+            --query 'Stacks[0].Outputs[?OutputKey==`DashboardCloudFrontDistributionId`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$DIST_ID" ]; then
+            aws cloudfront create-invalidation \
+              --distribution-id "$DIST_ID" \
+              --paths "/*"
+          fi

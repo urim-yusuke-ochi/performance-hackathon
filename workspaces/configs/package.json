@@ -1,0 +1,24 @@
+{
+  "name": "@wsh-2025/configs",
+  "private": true,
+  "dependencies": {
+    "@eslint/js": "9.15.0",
+    "@tsconfig/strictest": "2.0.5",
+    "eslint": "9.15.0",
+    "eslint-config-prettier": "9.1.0",
+    "eslint-import-resolver-typescript": "3.6.3",
+    "eslint-plugin-import": "2.31.0",
+    "eslint-plugin-react": "7.37.4",
+    "eslint-plugin-sort": "4.0.0",
+    "globals": "15.12.0",
+    "prettier": "3.4.0",
+    "prettier-plugin-packagejson": "2.5.6",
+    "prettier-plugin-sort-json": "4.0.0",
+    "prettier-plugin-tailwindcss": "0.6.11",
+    "typescript": "5.7.2",
+    "typescript-eslint": "8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.0"
+  }
+}

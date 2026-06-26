@@ -1,0 +1,22 @@
+{
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "env": {
+    "NODE_MODULES_CACHE": {
+      "value": "false"
+    },
+    "WIREIT_CACHE": {
+      "value": "none"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "stack": "heroku-24"
+}

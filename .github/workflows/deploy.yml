@@ -1,0 +1,166 @@
+name: Build & Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: performance-hackathon
+  ECS_CLUSTER: performance-hackathon
+  CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine participant ID
+        id: participant
+        run: |
+          # Use repository owner as participant ID
+          PARTICIPANT_ID="${{ github.repository_owner }}"
+          echo "id=${PARTICIPANT_ID}" >> $GITHUB_OUTPUT
+          echo "Participant: ${PARTICIPANT_ID}"
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          PARTICIPANT_ID: ${{ steps.participant.outputs.id }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$PARTICIPANT_ID-$IMAGE_TAG \
+                       -t $ECR_REGISTRY/$ECR_REPOSITORY:$PARTICIPANT_ID-latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$PARTICIPANT_ID-$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$PARTICIPANT_ID-latest
+
+      - name: Deploy to ECS
+        env:
+          PARTICIPANT_ID: ${{ steps.participant.outputs.id }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          SERVICE_NAME="perf-hack-${PARTICIPANT_ID}"
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${PARTICIPANT_ID}-${IMAGE_TAG}"
+
+          # Check if service exists
+          SERVICE_EXISTS=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_NAME \
+            --query 'services[?status==`ACTIVE`].serviceName' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$SERVICE_EXISTS" ]; then
+            echo "Creating new ECS service for participant: ${PARTICIPANT_ID}"
+            
+            # Register task definition
+            TASK_DEF=$(cat <<EOF
+          {
+            "family": "${SERVICE_NAME}",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "512",
+            "memory": "1024",
+            "executionRoleArn": "${{ secrets.ECS_EXECUTION_ROLE_ARN }}",
+            "taskRoleArn": "${{ secrets.ECS_TASK_ROLE_ARN }}",
+            "containerDefinitions": [
+              {
+                "name": "app",
+                "image": "${IMAGE_URI}",
+                "portMappings": [{"containerPort": 8000, "protocol": "tcp"}],
+                "environment": [
+                  {"name": "PORT", "value": "8000"},
+                  {"name": "API_BASE_URL", "value": "http://localhost:8000/api"}
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/performance-hackathon",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-stream-prefix": "${PARTICIPANT_ID}"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+            )
+            
+            echo "$TASK_DEF" > task-def.json
+            aws ecs register-task-definition --cli-input-json file://task-def.json
+            
+            # Create service
+            aws ecs create-service \
+              --cluster $ECS_CLUSTER \
+              --service-name $SERVICE_NAME \
+              --task-definition $SERVICE_NAME \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=${{ secrets.SUBNET_IDS }},securityGroups=[${{ secrets.SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}" \
+              --load-balancers "targetGroupArn=${{ secrets.TARGET_GROUP_ARN_PREFIX }}-${PARTICIPANT_ID},containerName=app,containerPort=8000"
+          else
+            echo "Updating existing ECS service for participant: ${PARTICIPANT_ID}"
+            
+            # Update task definition with new image
+            CURRENT_TASK_DEF=$(aws ecs describe-task-definition --task-definition $SERVICE_NAME)
+            NEW_TASK_DEF=$(echo $CURRENT_TASK_DEF | jq --arg IMAGE "$IMAGE_URI" \
+              '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+            
+            echo "$NEW_TASK_DEF" > task-def.json
+            aws ecs register-task-definition --cli-input-json file://task-def.json
+            
+            # Update service
+            aws ecs update-service \
+              --cluster $ECS_CLUSTER \
+              --service $SERVICE_NAME \
+              --task-definition $SERVICE_NAME \
+              --force-new-deployment
+          fi
+
+      - name: Wait for deployment
+        env:
+          PARTICIPANT_ID: ${{ steps.participant.outputs.id }}
+        run: |
+          SERVICE_NAME="perf-hack-${PARTICIPANT_ID}"
+          echo "Waiting for service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $SERVICE_NAME \
+            --timeout 300 || true
+          echo "Deployment complete!"
+
+      - name: Invalidate CloudFront cache
+        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+            --paths "/*"
+
+      - name: Output deployed URL
+        env:
+          PARTICIPANT_ID: ${{ steps.participant.outputs.id }}
+        run: |
+          echo "## Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Participant: **${PARTICIPANT_ID}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "URL: https://${PARTICIPANT_ID}.performance-hackathon.example.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Performance dashboard: https://dashboard.performance-hackathon.example.com" >> $GITHUB_STEP_SUMMARY

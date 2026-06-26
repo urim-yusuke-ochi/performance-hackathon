@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "emitDecoratorMetadata": true,
+    "exactOptionalPropertyTypes": false,
+    "experimentalDecorators": true,
+    "jsx": "react-jsx",
+    "lib": ["ESNext"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "./dist",
+    "paths": {
+      "@wsh-2025/client/*": ["../client/*"],
+      "@wsh-2025/server/*": ["./*"]
+    },
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "target": "ESNext"
+  },
+  "exclude": ["./dist", "./streams", "../client/dist"],
+  "extends": "@wsh-2025/configs/tsconfig.json",
+  "include": ["tools/**/*", "./src/**/*", "**/*.mjs", "drizzle.config.ts", "../client/**/*"]
+}
