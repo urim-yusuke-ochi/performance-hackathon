@@ -9,6 +9,7 @@ env:
   AWS_REGION: ap-northeast-1
   ECR_REPOSITORY: performance-hackathon
   ECS_CLUSTER: performance-hackathon
+  DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
 
 permissions:
@@ -167,6 +168,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Participant: **${PARTICIPANT_ID}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "URL: https://${PARTICIPANT_ID}.performance-hackathon.example.com" >> $GITHUB_STEP_SUMMARY
+          echo "URL: https://${PARTICIPANT_ID}.${DOMAIN_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Performance dashboard: https://dashboard.performance-hackathon.example.com" >> $GITHUB_STEP_SUMMARY
+          echo "Performance dashboard: https://dashboard.${DOMAIN_NAME}" >> $GITHUB_STEP_SUMMARY

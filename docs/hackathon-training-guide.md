@@ -90,9 +90,10 @@ export CERTIFICATE_ARN="arn:aws:acm:us-east-1:123456789012:certificate/xxxxx"
 | `ECS_EXECUTION_ROLE_ARN` | setup.sh 出力の ECSExecutionRoleArn |
 | `ECS_TASK_ROLE_ARN` | setup.sh 出力の ECSTaskRoleArn |
 | `CLOUDFRONT_DISTRIBUTION_ID` | setup.sh 出力の CloudFrontDistributionId |
-| `SUBNET_IDS` | setup.sh 出力の SubnetIds |
+| `SUBNET_IDS` | setup.sh 出力の SubnetIds (カンマ区切り) |
 | `SECURITY_GROUP_ID` | setup.sh 出力の SecurityGroupId |
 | `TARGET_GROUP_ARN_PREFIX` | add-participant.sh で作成されたターゲットグループARN |
+| `DOMAIN_NAME` | 参加者環境のベースドメイン (例: `performance-hackathon.your-domain.com`) |
 
 > **Tip**: GitHub Organization を使う場合、Organization レベルで共通の Secrets を設定し、`TARGET_GROUP_ARN_PREFIX` だけリポジトリレベルで設定するのが効率的です。
 

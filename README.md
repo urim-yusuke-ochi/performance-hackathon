@@ -151,6 +151,7 @@ aws cloudformation delete-stack --stack-name performance-hackathon-base
 | `SUBNET_IDS` | ECS 用サブネット ID (カンマ区切り) |
 | `SECURITY_GROUP_ID` | ECS 用セキュリティグループ ID |
 | `TARGET_GROUP_ARN_PREFIX` | 参加者ごとの ALB ターゲットグループ ARN |
+| `DOMAIN_NAME` | 参加者環境のベースドメイン (例: `performance-hackathon.your-domain.com`) |
 
 ### コスト目安
 

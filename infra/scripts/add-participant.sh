@@ -38,7 +38,7 @@ TG_ARN=$(aws elbv2 create-target-group \
 echo "Target Group created: ${TG_ARN}"
 
 # Create listener rule (route by Host header)
-DOMAIN_NAME="performance-hackathon.example.com"
+DOMAIN_NAME="${DOMAIN_NAME:-performance-hackathon.example.com}"
 aws elbv2 create-rule \
   --listener-arn "${ALB_LISTENER_ARN}" \
   --priority "${PRIORITY}" \

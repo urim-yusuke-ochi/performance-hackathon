@@ -16,6 +16,7 @@ on:
 env:
   AWS_REGION: ap-northeast-1
   SCORES_BUCKET: performance-hackathon-scores
+  DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
 
 permissions:
   id-token: write
@@ -50,7 +51,7 @@ jobs:
           TARGET_URL="${{ github.event.inputs.target_url }}"
           
           if [ -z "$TARGET_URL" ]; then
-            TARGET_URL="https://${PARTICIPANT_ID}.performance-hackathon.example.com"
+            TARGET_URL="https://${PARTICIPANT_ID}.${DOMAIN_NAME}"
           fi
           
           echo "participant_id=${PARTICIPANT_ID}" >> $GITHUB_OUTPUT
@@ -61,7 +62,7 @@ jobs:
         run: |
           TARGET_URL="${{ steps.config.outputs.target_url }}"
           echo "Waiting for ${TARGET_URL} to be ready..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 10); do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${TARGET_URL}" || echo "000")
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Service is ready!"
@@ -222,22 +223,28 @@ jobs:
                 }
               }
             }
-
+            
             leaderboard.sort((a, b) => b.total_score - a.total_score);
-
+            
             const output = {
               updated_at: new Date().toISOString(),
               participants: leaderboard.length,
               leaderboard: leaderboard
             };
-
+            
             fs.writeFileSync('leaderboard.json', JSON.stringify(output, null, 2));
             console.log('Leaderboard generated with', leaderboard.length, 'participants');
           "
-
-          # Upload leaderboard
+          
+          # Upload leaderboard to scores bucket
           aws s3 cp leaderboard.json \
             "s3://${SCORES_BUCKET}/dashboard/leaderboard.json" \
+            --content-type "application/json" \
+            --cache-control "max-age=60"
+          
+          # Also upload to dashboard bucket for direct access
+          aws s3 cp leaderboard.json \
+            "s3://performance-hackathon-dashboard/leaderboard.json" \
             --content-type "application/json" \
             --cache-control "max-age=60"
 
@@ -252,4 +259,4 @@ jobs:
           echo "|-------------|-------|-----|" >> $GITHUB_STEP_SUMMARY
           echo "| ${PARTICIPANT_ID} | **${TOTAL_SCORE:-0}** | 900 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📈 [Dashboard](https://dashboard.performance-hackathon.example.com)" >> $GITHUB_STEP_SUMMARY
+          echo "📈 [Dashboard](https://dashboard.${DOMAIN_NAME})" >> $GITHUB_STEP_SUMMARY
