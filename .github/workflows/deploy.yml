@@ -149,8 +149,7 @@ jobs:
           echo "Waiting for service to stabilize..."
           aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
-            --services $SERVICE_NAME \
-            --timeout 300 || true
+            --services $SERVICE_NAME || true
           echo "Deployment complete!"
 
       - name: Invalidate CloudFront cache

@@ -192,6 +192,11 @@ jobs:
             "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/latest.json" \
             --content-type "application/json"
           
+          # Also upload to dashboard bucket for detail view
+          aws s3 cp score-report.json \
+            "s3://performance-hackathon-dashboard/scores/${PARTICIPANT_ID}/latest.json" \
+            --content-type "application/json"
+          
           echo "Score uploaded to S3"
 
       - name: Update leaderboard
