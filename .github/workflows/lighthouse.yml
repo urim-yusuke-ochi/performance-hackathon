@@ -40,7 +40,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-arn: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Determine participant and URL
@@ -48,11 +48,11 @@ jobs:
         run: |
           PARTICIPANT_ID="${{ github.event.inputs.participant_id || github.repository_owner }}"
           TARGET_URL="${{ github.event.inputs.target_url }}"
-          
+
           if [ -z "$TARGET_URL" ]; then
             TARGET_URL="https://${PARTICIPANT_ID}.performance-hackathon.example.com"
           fi
-          
+
           echo "participant_id=${PARTICIPANT_ID}" >> $GITHUB_OUTPUT
           echo "target_url=${TARGET_URL}" >> $GITHUB_OUTPUT
           echo "timestamp=$(date -u +%Y%m%dT%H%M%SZ)" >> $GITHUB_OUTPUT
@@ -76,9 +76,9 @@ jobs:
         run: |
           TARGET_URL="${{ steps.config.outputs.target_url }}"
           PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
-          
+
           mkdir -p lighthouse-results
-          
+
           # Define pages to test (matching scoring.md criteria)
           PAGES=(
             "/:home"
@@ -91,10 +91,10 @@ jobs:
             "/episodes/2:episode_premium"
             "/not-found-page:404"
           )
-          
+
           TOTAL_SCORE=0
           RESULTS="[]"
-          
+
           for PAGE_ENTRY in "${PAGES[@]}"; do
             PAGE_PATH="${PAGE_ENTRY%%:*}"
             PAGE_NAME="${PAGE_ENTRY##*:}"
@@ -137,7 +137,7 @@ jobs:
                 '. + [{"page": $name, "score": 0, "error": "measurement_failed"}]')
             fi
           done
-          
+
           echo "Total page display score: ${TOTAL_SCORE}/900"
           echo "total_score=${TOTAL_SCORE}" >> $GITHUB_OUTPUT
           echo "results=${RESULTS}" >> $GITHUB_OUTPUT
@@ -161,31 +161,31 @@ jobs:
             "measured_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
-          
+
           cat score-report.json
 
       - name: Upload scores to S3
         run: |
           PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
           TIMESTAMP="${{ steps.config.outputs.timestamp }}"
-          
+
           # Upload timestamped report
           aws s3 cp score-report.json \
             "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/${TIMESTAMP}.json" \
             --content-type "application/json"
-          
+
           # Upload latest report (overwrite)
           aws s3 cp score-report.json \
             "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/latest.json" \
             --content-type "application/json"
-          
+
           echo "Score uploaded to S3"
 
       - name: Update leaderboard
         run: |
           # Download all latest scores and aggregate
           aws s3 sync "s3://${SCORES_BUCKET}/scores/" ./all-scores/ --exclude "*" --include "*/latest.json"
-          
+
           # Generate leaderboard JSON
           node -e "
             const fs = require('fs');
@@ -222,7 +222,7 @@ jobs:
             fs.writeFileSync('leaderboard.json', JSON.stringify(output, null, 2));
             console.log('Leaderboard generated with', leaderboard.length, 'participants');
           "
-          
+
           # Upload leaderboard
           aws s3 cp leaderboard.json \
             "s3://${SCORES_BUCKET}/dashboard/leaderboard.json" \
