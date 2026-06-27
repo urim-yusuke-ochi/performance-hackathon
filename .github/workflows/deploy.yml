@@ -107,14 +107,28 @@ jobs:
             aws ecs register-task-definition --cli-input-json file://task-def.json
             
             # Create service
+            # Build subnet array from comma-separated SUBNET_IDS
+            IFS=',' read -ra SUBNET_ARRAY <<< "${{ secrets.SUBNET_IDS }}"
+            SUBNETS_JSON=$(printf '"%s",' "${SUBNET_ARRAY[@]}" | sed 's/,$//')
+            
+            cat > network-config.json <<NETEOF
+            {
+              "awsvpcConfiguration": {
+                "subnets": [${SUBNETS_JSON}],
+                "securityGroups": ["${{ secrets.SECURITY_GROUP_ID }}"],
+                "assignPublicIp": "ENABLED"
+              }
+            }
+            NETEOF
+            
             aws ecs create-service \
               --cluster $ECS_CLUSTER \
               --service-name $SERVICE_NAME \
               --task-definition $SERVICE_NAME \
               --desired-count 1 \
               --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets=${{ secrets.SUBNET_IDS }},securityGroups=[${{ secrets.SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}" \
-              --load-balancers "targetGroupArn=${{ secrets.TARGET_GROUP_ARN_PREFIX }}-${PARTICIPANT_ID},containerName=app,containerPort=8000"
+              --network-configuration file://network-config.json \
+              --load-balancers "targetGroupArn=${{ secrets.TARGET_GROUP_ARN_PREFIX }},containerName=app,containerPort=8000"
           else
             echo "Updating existing ECS service for participant: ${PARTICIPANT_ID}"
             
