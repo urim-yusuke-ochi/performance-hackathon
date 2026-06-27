@@ -47,20 +47,18 @@ COPY workspaces/schema/package.json ./workspaces/schema/
 COPY workspaces/client/package.json ./workspaces/client/
 COPY workspaces/server/package.json ./workspaces/server/
 
-# Install production dependencies only
-RUN pnpm install --frozen-lockfile --prod
+# Install dependencies (including dev - needed for SSR with tsx)
+RUN pnpm install --frozen-lockfile
 
 # Copy built client assets from builder
 COPY --from=builder /app/workspaces/client/dist ./workspaces/client/dist/
 
-# Copy server source (tsx runs TypeScript directly)
+# Copy all source (needed for SSR - server uses tsx to run TypeScript directly)
+COPY workspaces/client ./workspaces/client/
 COPY workspaces/server ./workspaces/server/
 COPY workspaces/schema ./workspaces/schema/
 COPY workspaces/configs ./workspaces/configs/
 COPY public ./public/
-
-# Copy server loaders
-COPY workspaces/server/loaders ./workspaces/server/loaders/
 
 # Expose port
 ENV PORT=8000
