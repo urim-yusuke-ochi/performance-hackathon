@@ -27,10 +27,10 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -48,11 +48,11 @@ jobs:
         run: |
           PARTICIPANT_ID="${{ github.event.inputs.participant_id || github.repository_owner }}"
           TARGET_URL="${{ github.event.inputs.target_url }}"
-
+          
           if [ -z "$TARGET_URL" ]; then
             TARGET_URL="https://${PARTICIPANT_ID}.performance-hackathon.example.com"
           fi
-
+          
           echo "participant_id=${PARTICIPANT_ID}" >> $GITHUB_OUTPUT
           echo "target_url=${TARGET_URL}" >> $GITHUB_OUTPUT
           echo "timestamp=$(date -u +%Y%m%dT%H%M%SZ)" >> $GITHUB_OUTPUT
@@ -76,9 +76,9 @@ jobs:
         run: |
           TARGET_URL="${{ steps.config.outputs.target_url }}"
           PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
-
+          
           mkdir -p lighthouse-results
-
+          
           # Define pages to test (matching scoring.md criteria)
           PAGES=(
             "/:home"
@@ -91,10 +91,10 @@ jobs:
             "/episodes/2:episode_premium"
             "/not-found-page:404"
           )
-
+          
           TOTAL_SCORE=0
           RESULTS="[]"
-
+          
           for PAGE_ENTRY in "${PAGES[@]}"; do
             PAGE_PATH="${PAGE_ENTRY%%:*}"
             PAGE_NAME="${PAGE_ENTRY##*:}"
@@ -137,55 +137,67 @@ jobs:
                 '. + [{"page": $name, "score": 0, "error": "measurement_failed"}]')
             fi
           done
-
+          
           echo "Total page display score: ${TOTAL_SCORE}/900"
           echo "total_score=${TOTAL_SCORE}" >> $GITHUB_OUTPUT
-          echo "results=${RESULTS}" >> $GITHUB_OUTPUT
+          
+          # Use delimiter syntax for multi-line JSON output
+          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "results<<${EOF_MARKER}" >> $GITHUB_OUTPUT
+          echo "${RESULTS}" >> $GITHUB_OUTPUT
+          echo "${EOF_MARKER}" >> $GITHUB_OUTPUT
 
       - name: Generate score report
         env:
           PARTICIPANT_ID: ${{ steps.config.outputs.participant_id }}
           TIMESTAMP: ${{ steps.config.outputs.timestamp }}
           TOTAL_SCORE: ${{ steps.lighthouse_pages.outputs.total_score }}
+          RESULTS_JSON: ${{ steps.lighthouse_pages.outputs.results }}
         run: |
-          # Create score JSON
-          cat > score-report.json <<EOF
-          {
-            "participant_id": "${PARTICIPANT_ID}",
-            "timestamp": "${TIMESTAMP}",
-            "commit_sha": "${{ github.sha }}",
-            "repository": "${{ github.repository }}",
-            "total_score": ${TOTAL_SCORE:-0},
-            "max_score": 900,
-            "pages": ${{ steps.lighthouse_pages.outputs.results || '[]' }},
-            "measured_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          }
-          EOF
-
+          # Create score JSON using jq for safe JSON construction
+          jq -n \
+            --arg participant_id "$PARTICIPANT_ID" \
+            --arg timestamp "$TIMESTAMP" \
+            --arg commit_sha "${{ github.sha }}" \
+            --arg repository "${{ github.repository }}" \
+            --argjson total_score "${TOTAL_SCORE:-0}" \
+            --argjson pages "${RESULTS_JSON:-[]}" \
+            --arg measured_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              participant_id: $participant_id,
+              timestamp: $timestamp,
+              commit_sha: $commit_sha,
+              repository: $repository,
+              total_score: $total_score,
+              max_score: 900,
+              pages: $pages,
+              measured_at: $measured_at
+            }' > score-report.json
+          
           cat score-report.json
 
       - name: Upload scores to S3
         run: |
           PARTICIPANT_ID="${{ steps.config.outputs.participant_id }}"
           TIMESTAMP="${{ steps.config.outputs.timestamp }}"
-
+          
           # Upload timestamped report
           aws s3 cp score-report.json \
             "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/${TIMESTAMP}.json" \
             --content-type "application/json"
-
+          
           # Upload latest report (overwrite)
           aws s3 cp score-report.json \
             "s3://${SCORES_BUCKET}/scores/${PARTICIPANT_ID}/latest.json" \
             --content-type "application/json"
-
+          
           echo "Score uploaded to S3"
 
       - name: Update leaderboard
         run: |
           # Download all latest scores and aggregate
           aws s3 sync "s3://${SCORES_BUCKET}/scores/" ./all-scores/ --exclude "*" --include "*/latest.json"
-
+          
           # Generate leaderboard JSON
           node -e "
             const fs = require('fs');
@@ -210,15 +222,15 @@ jobs:
                 }
               }
             }
-            
+
             leaderboard.sort((a, b) => b.total_score - a.total_score);
-            
+
             const output = {
               updated_at: new Date().toISOString(),
               participants: leaderboard.length,
               leaderboard: leaderboard
             };
-            
+
             fs.writeFileSync('leaderboard.json', JSON.stringify(output, null, 2));
             console.log('Leaderboard generated with', leaderboard.length, 'participants');
           "
